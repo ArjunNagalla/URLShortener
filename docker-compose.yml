@@ -10,8 +10,8 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__DefaultConnection: Data Source=/data/shorturl.db
-      App__BaseUrl: http://localhost:5000
-      Security__ApiKey: dev-api-key-secret-9941
+      App__BaseUrl: ${APP_BASE_URL:-http://localhost:5000}
+      Security__ApiKey: ${SHORTURL_API_KEY:?Set SHORTURL_API_KEY before starting Compose}
     volumes:
       - shorturl-data:/data
     restart: unless-stopped

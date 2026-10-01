@@ -1,0 +1,26 @@
+@baseUrl = http://localhost:5000
+@apiKey = dev-loca
+@code = article1
+
+### Liveness
+GET {{baseUrl}}/health/live
+
+### Readiness
+GET {{baseUrl}}/health/ready
+
+### Create a link with an alias
+POST {{baseUrl}}/api/links
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "url": "https://example.com/article",
+  "customAlias": "{{code}}"
+}
+
+### Resolve the short code (public)
+GET {{baseUrl}}/{{code}}
+
+### Read click statistics
+GET {{baseUrl}}/api/links/{{code}}/stats
+X-API-Key: {{apiKey}}

@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore with NuGet vulnerability warnings as errors
+        run: dotnet restore tests/ShortUrl.Api.Tests/ShortUrl.Api.Tests.csproj -p:WarningsAsErrors=NU1901%3BNU1902%3BNU1903%3BNU1904
+      - name: Verify formatting
+        run: |
+          dotnet format ShortUrl.Api.csproj --verify-no-changes --no-restore
+          dotnet format tests/ShortUrl.Api.Tests/ShortUrl.Api.Tests.csproj --verify-no-changes --no-restore
+      - name: Audit dependencies
+        run: |
+          dotnet list ShortUrl.Api.csproj package --vulnerable --include-transitive
+          dotnet list tests/ShortUrl.Api.Tests/ShortUrl.Api.Tests.csproj package --vulnerable --include-transitive
+      - name: Run tests
+        run: dotnet test tests/ShortUrl.Api.Tests/ShortUrl.Api.Tests.csproj --no-restore --configuration Release
+      - name: Publish application
+        run: dotnet publish ShortUrl.Api.csproj --no-restore --configuration Release --output "${RUNNER_TEMP}/shorturl-publish"
+      - name: Build container image
+        run: docker build --tag shorturl-api:${GITHUB_SHA} .

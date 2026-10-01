@@ -3,8 +3,12 @@ obj/
 .git/
 .gitignore
 .vscode/
+.env
+.env.*
+!.env.example
 Dockerfile*
 README.md
 *.user
 *.suo
 *.db
+appsettings.Development.json

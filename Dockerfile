@@ -10,14 +10,14 @@ RUN dotnet publish "ShortUrl.Api.csproj" -c Release -o /app/publish /p:UseAppHos
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 
-RUN mkdir -p /data && chmod 777 /data
+RUN mkdir -p /data && chown $APP_UID:$APP_UID /data
 
 COPY --from=build /app/publish .
 
+USER $APP_UID
+
 ENV ASPNETCORE_URLS=http://+:8080
 ENV ConnectionStrings__DefaultConnection="Data Source=/data/shorturl.db"
-ENV App__BaseUrl=http://localhost:5000
-ENV Security__ApiKey=dev-api-key-secret-9941
 
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "ShortUrl.Api.dll"]

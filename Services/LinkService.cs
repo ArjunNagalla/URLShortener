@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Update;
 using ShortUrl.Api.Domain;
 using ShortUrl.Api.Infrastructure;
 using ShortUrl.Api.Models;
@@ -8,6 +9,7 @@ namespace ShortUrl.Api.Services;
 
 public class LinkService : ILinkService
 {
+    private const int MaxCodeGenerationAttempts = 5;
     private readonly ApplicationDbContext _db;
     private readonly ICodeGenerator _codeGenerator;
     private static readonly HashSet<string> ReservedRoutes = new(StringComparer.OrdinalIgnoreCase)
@@ -21,7 +23,10 @@ public class LinkService : ILinkService
         _codeGenerator = codeGenerator;
     }
 
-    public async Task<(LinkResponse? Response, string? Error, int StatusCode)> CreateLinkAsync(CreateLinkRequest request, string baseUrl)
+    public async Task<(LinkResponse? Response, string? Error, int StatusCode)> CreateLinkAsync(
+        CreateLinkRequest request,
+        string baseUrl,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(request.Url) || !Uri.TryCreate(request.Url, UriKind.Absolute, out var parsedUri) ||
             (parsedUri.Scheme != Uri.UriSchemeHttp && parsedUri.Scheme != Uri.UriSchemeHttps))
@@ -39,7 +44,6 @@ public class LinkService : ILinkService
             return (null, "Expiration time must be strictly in the future.", 400);
         }
 
-        string finalCode;
         string? customAlias = null;
 
         if (!string.IsNullOrWhiteSpace(request.CustomAlias))
@@ -55,76 +59,103 @@ public class LinkService : ILinkService
                 return (null, "Custom alias uses a reserved route name.", 400);
             }
 
-            bool aliasExists = await _db.Links.AnyAsync(l => l.Code == customAlias || l.CustomAlias == customAlias);
-            if (aliasExists)
-            {
-                return (null, "Custom alias is already in use.", 409);
-            }
-
-            finalCode = customAlias;
-        }
-        else
-        {
-            int retries = 0;
-            do
-            {
-                finalCode = _codeGenerator.GenerateCode();
-                retries++;
-            } while (await _db.Links.AnyAsync(l => l.Code == finalCode) && retries < 5);
-
-            if (retries >= 5)
-            {
-                return (null, "Failed to generate a unique short code. Please try again.", 503);
-            }
         }
 
-        var link = new Link
+        for (var attempt = 0; attempt < MaxCodeGenerationAttempts; attempt++)
         {
-            Code = finalCode,
-            DestinationUrl = request.Url,
-            CreatedAtUtc = DateTime.UtcNow,
-            ExpiresAtUtc = request.ExpiresAt,
-            CustomAlias = customAlias
-        };
+            var code = customAlias ?? _codeGenerator.GenerateCode();
+            var codeExists = await _db.Links.AnyAsync(
+                link => link.Code == code || link.CustomAlias == code,
+                cancellationToken);
+            if (codeExists)
+            {
+                if (customAlias is not null)
+                {
+                    return (null, "Custom alias is already in use.", 409);
+                }
 
-        _db.Links.Add(link);
-        await _db.SaveChangesAsync();
+                continue;
+            }
 
-        var response = new LinkResponse(
-            link.Code,
-            $"{baseUrl.TrimEnd('/')}/{link.Code}",
-            link.DestinationUrl,
-            link.CreatedAtUtc,
-            link.ExpiresAtUtc,
-            link.CustomAlias
-        );
+            var link = new Link
+            {
+                Code = code,
+                DestinationUrl = request.Url,
+                CreatedAtUtc = DateTime.UtcNow,
+                ExpiresAtUtc = request.ExpiresAt,
+                CustomAlias = customAlias
+            };
 
-        return (response, null, 201);
+            _db.Links.Add(link);
+            try
+            {
+                await _db.SaveChangesAsync(cancellationToken);
+                var response = new LinkResponse(
+                    link.Code,
+                    $"{baseUrl.TrimEnd('/')}/{link.Code}",
+                    link.DestinationUrl,
+                    link.CreatedAtUtc,
+                    link.ExpiresAtUtc,
+                    link.CustomAlias);
+
+                return (response, null, 201);
+            }
+            catch (DbUpdateException)
+            {
+                _db.Entry(link).State = EntityState.Detached;
+                var codeWasClaimed = await _db.Links.AnyAsync(
+                    existing => existing.Code == code || existing.CustomAlias == code,
+                    cancellationToken);
+                if (!codeWasClaimed)
+                {
+                    throw;
+                }
+
+                if (customAlias is not null)
+                {
+                    return (null, "Custom alias is already in use.", 409);
+                }
+            }
+        }
+
+        return (null, "Failed to generate a unique short code. Please try again.", 503);
     }
 
-    public async Task<(string? DestinationUrl, string? ErrorStatus)> ResolveLinkAsync(string code)
+    public async Task<(string? DestinationUrl, string? ErrorStatus)> ResolveLinkAsync(
+        string code,
+        CancellationToken cancellationToken = default)
     {
-        var link = await _db.Links.FirstOrDefaultAsync(l => l.Code == code);
+        var link = await _db.Links.AsNoTracking().FirstOrDefaultAsync(l => l.Code == code, cancellationToken);
         if (link == null)
         {
             return (null, "404");
         }
 
-        if (link.ExpiresAtUtc.HasValue && link.ExpiresAtUtc.Value <= DateTime.UtcNow)
+        var accessedAtUtc = DateTime.UtcNow;
+        if (link.ExpiresAtUtc.HasValue && link.ExpiresAtUtc.Value <= accessedAtUtc)
         {
             return (null, "410");
         }
 
-        link.TotalClicks += 1;
-        link.LastAccessedAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        var updatedRows = await _db.Links
+            .Where(existing => existing.Id == link.Id &&
+                (!existing.ExpiresAtUtc.HasValue || existing.ExpiresAtUtc > accessedAtUtc))
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(existing => existing.TotalClicks, existing => existing.TotalClicks + 1)
+                .SetProperty(existing => existing.LastAccessedAtUtc, accessedAtUtc), cancellationToken);
+
+        if (updatedRows == 0)
+        {
+            var stillExists = await _db.Links.AnyAsync(existing => existing.Id == link.Id, cancellationToken);
+            return (null, stillExists ? "410" : "404");
+        }
 
         return (link.DestinationUrl, null);
     }
 
-    public async Task<LinkStatsResponse?> GetStatsAsync(string code)
+    public async Task<LinkStatsResponse?> GetStatsAsync(string code, CancellationToken cancellationToken = default)
     {
-        var link = await _db.Links.AsNoTracking().FirstOrDefaultAsync(l => l.Code == code);
+        var link = await _db.Links.AsNoTracking().FirstOrDefaultAsync(l => l.Code == code, cancellationToken);
         if (link == null) return null;
 
         return new LinkStatsResponse(

@@ -1,0 +1,14 @@
+**/bin/
+**/obj/
+.vs/
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+TestResults/
+coverage/
+artifacts/
+*.db
+*.db-shm
+*.db-wal
+TempShortUrl.Api.Build/

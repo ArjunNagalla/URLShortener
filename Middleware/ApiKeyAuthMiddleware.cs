@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace ShortUrl.Api.Middleware;
 
 public class ApiKeyAuthMiddleware
@@ -13,8 +16,11 @@ public class ApiKeyAuthMiddleware
     public async Task InvokeAsync(HttpContext context, IConfiguration config)
     {
         var path = context.Request.Path.Value ?? string.Empty;
+        var isLinksPath = path.Equals("/api/links", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("/api/links/", StringComparison.OrdinalIgnoreCase);
 
-        if (!path.StartsWith("/api/links") || context.Request.Method == "GET" && !path.Contains("/stats"))
+        if (!isLinksPath || context.Request.Method.Equals("GET", StringComparison.OrdinalIgnoreCase) &&
+            !path.Contains("/stats", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context);
             return;
@@ -28,8 +34,17 @@ public class ApiKeyAuthMiddleware
             return;
         }
 
-        if (!context.Request.Headers.TryGetValue(ApiKeyHeader, out var extractedApiKey) ||
-            !string.Equals(extractedApiKey, expectedApiKey, StringComparison.Ordinal))
+        if (!context.Request.Headers.TryGetValue(ApiKeyHeader, out var extractedApiKey))
+        {
+            context.Response.StatusCode = 401;
+            await context.Response.WriteAsync("Unauthorized: Invalid or missing X-API-Key header.");
+            return;
+        }
+
+        var expectedKeyBytes = Encoding.UTF8.GetBytes(expectedApiKey);
+        var providedKeyBytes = Encoding.UTF8.GetBytes(extractedApiKey.ToString());
+        if (expectedKeyBytes.Length != providedKeyBytes.Length ||
+            !CryptographicOperations.FixedTimeEquals(expectedKeyBytes, providedKeyBytes))
         {
             context.Response.StatusCode = 401;
             await context.Response.WriteAsync("Unauthorized: Invalid or missing X-API-Key header.");
