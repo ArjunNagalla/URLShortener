@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using ShortUrl.Api.Infrastructure;
@@ -8,6 +9,16 @@ using ShortUrl.Api.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+
+if (!string.IsNullOrWhiteSpace(connectionString) && connectionString.Contains("Data Source=", StringComparison.OrdinalIgnoreCase))
+{
+    var sqliteConnectionString = new SqliteConnectionStringBuilder(connectionString);
+    var dbDirectory = Path.GetDirectoryName(sqliteConnectionString.DataSource);
+    if (!string.IsNullOrEmpty(dbDirectory) && !Directory.Exists(dbDirectory))
+    {
+        Directory.CreateDirectory(dbDirectory);
+    }
+}
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
 {

@@ -1,0 +1,20 @@
+services:
+  shorturl-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shorturl-api
+    ports:
+      - "5000:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Data Source=/data/shorturl.db
+      App__BaseUrl: http://localhost:5000
+      Security__ApiKey: dev-api-key-secret-9941
+    volumes:
+      - shorturl-data:/data
+    restart: unless-stopped
+
+volumes:
+  shorturl-data:
